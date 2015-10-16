@@ -1,2 +1,0 @@
-127.0.0.1 ntpd: time slew -0.002755s
-127.0.0.1 ntpd: time slew -0.002073s

@@ -1,0 +1,125 @@
+#!/usr/bin/perl
+use FiLeS;
+use strict;
+use warnings;
+use Net::NTP;
+use Data::Dumper;
+use processLogFiles;
+use Fcntl qw( :flock );
+use Net::OpenSSH::Parallel;
+use Time::HiRes qw(gettimeofday tv_interval);
+
+my %WARNS = ();
+my @stdout_fh = ();
+my @stderr_fh = ();
+my @log_files = ();
+
+my $confFile = "conf.ini";
+my $dirFile = "directories.ini";
+my $objectFiles = FiLeS->new( "confRef" , "dirRef" );
+my $refHashDir = $objectFiles->getFiles( $dirFile );
+my $refHashconf = $objectFiles->getFiles( $confFile );
+my $refHashDirectories = $objectFiles->makeDirectories( $refHashDir );
+
+my $objectProcessLogFiles = processLogFiles->new( "refLogFile" , "refOffset" , "refPrintOutput" );
+
+my $t0 = [gettimeofday];
+my %response = get_ntp_response("0.se.pool.ntp.org",123);
+my $refHashNTP = openSSH ($refHashconf , $refHashDir);
+my $t1 = [gettimeofday];
+
+print "This is what we want: " . $response{'Reference Timestamp'} . "\n";
+
+my $elapsed = tv_interval ($t0, $t1);
+print "Elapsed time: ".$elapsed."\n";
+
+my $refHashProcessOffsetNTP = $objectProcessLogFiles->processOffsetNTP( $refHashNTP );
+
+print Dumper $refHashProcessOffsetNTP;
+
+=note
+    We need to add the process time of ssh::parallel
+    elapsed time + offset = time difference from ref server time
+=cut
+
+sub openSSH {
+
+    my ( $hashRefconf , $hashRefDir ) = @_;
+
+    my @mps = sort keys ( $hashRefconf );
+
+    my $maximum_workers = @mps;
+    my $maximum_connections = 2 * $maximum_workers;
+    my $maximum_reconnections = 3;
+
+    my %opts = ( workers       => $maximum_workers,
+		 connections   => $maximum_connections,
+		 reconnections => $maximum_reconnections );
+
+    my $pssh = Net::OpenSSH::Parallel->new(%opts);
+
+    my $num = 0;
+    my %sudo_passwords = ();
+
+    foreach my $hash ( @mps ) {
+
+	push (@log_files , "".$hashRefDir->{Directories}{log_dir}."/".$hashRefconf->{$hash}{log}."");
+
+	open $stdout_fh[$num] , '>' , "".$hashRefDir->{Directories}{log_dir}."/".$hashRefconf->{$hash}{log}.""
+	    or warn "unable to create file: $hashRefconf->{$hash}{log} - $!";
+	open $stderr_fh[$num], '>>', "".$hashRefDir->{Directories}{err_dir}."/".$hashRefconf->{$hash}{error}.""
+	    or warn "unable to create file: $hashRefconf->{$hash}{error} - $!";
+
+	$pssh->add_host( $hashRefconf->{$hash}{host} ,
+			 user              => $hashRefconf->{$hash}{user},
+			 port              => $hashRefconf->{$hash}{port},
+			 password          => $hashRefconf->{$hash}{psw},
+			 default_stderr_fh => $stderr_fh[$num],
+			 default_stdout_fh => $stdout_fh[$num] );
+
+	$sudo_passwords{$hashRefconf->{$hash}{host}} = $hashRefconf->{$hash}{psw};
+
+	$num++;
+    }
+
+    # hostname -I another way to get IP
+    $pssh->push('*', command => 'ntpdate -q 193.79.237.14; echo %HOST%' );
+
+    $pssh->run;
+
+    closeFH( @stdout_fh , @stderr_fh );
+
+    my $refhashProcessData = $objectProcessLogFiles->processNtpDate( \@log_files );
+
+    return $refhashProcessData;
+
+}
+
+sub closeFH {
+    foreach my $fh (@_) { close $fh or die "Error closing $!\n"; }
+}
+
+local $SIG{__WARN__} = sub {
+    my $message = shift;
+    return if $WARNS{$message}++;
+    logger('warning', $message);
+};
+
+sub logger {
+
+    my ( $level , $msg ) = @_;
+    my $error = "$refHashDirectories->{Directories}{warn_dir}/error.err";
+    
+    open my $out, '>>', "".$error.""
+	or die "Could not open file: ".$error." - $!\n";
+
+    flock( $out , LOCK_SH )
+	or die "Could not lock '".$out."' - $!\n";
+    
+    chomp $msg;
+    my $datestring = localtime();
+    print $out "".$level." - ".$msg." - ".$datestring."\n";
+
+    close $out
+	or die "Could not close file: ".$error." - $!\n";
+}

@@ -6,6 +6,7 @@ CONTENTS OF THIS FILE
 ---------------------
 
  * Introduction
+ * Important notes
  * Requirements
  * Recommended modules
  * Installation
@@ -17,6 +18,13 @@ CONTENTS OF THIS FILE
 ---------------------
 
  * Introduction
+ The Parallel-NTP-Synchronization script is written in OOP way. The script has 
+  the ability to connect and force pararallel NTP synchronization for different 
+  LinuxOS NTP Servers.
+
+ * Important notes
+ Caution, the script can only force NTP synchronization to LinuxOS and not WinOS.
+ 
  The script is fully automated.
 
  * Requirements
